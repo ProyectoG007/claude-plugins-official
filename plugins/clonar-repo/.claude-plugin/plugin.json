@@ -1,0 +1,8 @@
+{
+  "name": "clonar-repo",
+  "description": "Comando slash para clonar repos y dejarlos listos con dependencias instaladas y entorno configurado",
+  "author": {
+    "name": "Guillermo Acevedo",
+    "email": "guillermo.acevedo107@gmail.com"
+  }
+}
