@@ -1,0 +1,8 @@
+{
+  "name": "levantar",
+  "description": "Comando slash para levantar entornos de desarrollo completos: detecta el stack, inicia servicios, y reporta estado",
+  "author": {
+    "name": "Guillermo Acevedo",
+    "email": "guillermo.acevedo107@gmail.com"
+  }
+}

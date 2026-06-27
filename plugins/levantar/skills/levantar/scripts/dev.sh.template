@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# dev.sh — Levanta el entorno de desarrollo completo
+# Uso: ./dev.sh [todo|backend|frontend|db] [--clean]
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+COMPONENT="${1:-todo}"
+CLEAN=false
+[[ "${2:-}" == "--clean" || "${1:-}" == "--clean" ]] && CLEAN=true
+
+PIDS=()
+
+cleanup() {
+    echo -e "\n${YELLOW}Deteniendo servicios...${NC}"
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    docker-compose down 2>/dev/null || true
+    echo -e "${GREEN}Todo limpio.${NC}"
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+log() { echo -e "${BLUE}[dev]${NC} $1"; }
+ok()  { echo -e "${GREEN}  ✓${NC} $1"; }
+err() { echo -e "${RED}  ✗${NC} $1"; }
+
+check_port() {
+    lsof -i :"$1" >/dev/null 2>&1
+}
+
+# --- CLEAN ---
+if $CLEAN; then
+    log "Limpiando caches y builds..."
+    [[ -f backend/go.mod ]] && (cd backend && go clean -cache 2>/dev/null) && ok "Go cache limpio"
+    [[ -f frontend/pubspec.yaml ]] && (cd frontend && flutter clean >/dev/null 2>&1 && flutter pub get >/dev/null 2>&1) && ok "Flutter limpio"
+    [[ -f frontend/package.json ]] && (cd frontend && rm -rf node_modules && npm install >/dev/null 2>&1) && ok "Node modules reinstalados"
+    [[ -f docker-compose.yml ]] && docker-compose down -v >/dev/null 2>&1 && ok "Docker volumes limpiados"
+fi
+
+# --- DATABASE ---
+start_db() {
+    if [[ -f "$PROJECT_ROOT/docker-compose.yml" ]] || [[ -f "$PROJECT_ROOT/docker-compose.yaml" ]]; then
+        if check_port 5432; then
+            ok "PostgreSQL ya corriendo en :5432"
+        else
+            log "Levantando base de datos..."
+            docker-compose up -d 2>/dev/null
+            sleep 2
+            if check_port 5432; then
+                ok "PostgreSQL levantado en :5432"
+            else
+                err "PostgreSQL no respondió en :5432"
+            fi
+        fi
+    else
+        log "No se encontró docker-compose.yml, saltando DB"
+    fi
+}
+
+# --- BACKEND ---
+start_backend() {
+    if [[ -f "$PROJECT_ROOT/backend/go.mod" ]]; then
+        if check_port 8080; then
+            ok "Backend Go ya corriendo en :8080"
+        else
+            log "Levantando backend Go..."
+            cd "$PROJECT_ROOT/backend"
+            export PATH="/opt/flutter/bin:/root/go/bin:$PATH"
+            if [[ -f .air.toml ]]; then
+                air > /tmp/backend.log 2>&1 &
+                PIDS+=($!)
+                ok "Backend Go con Air (hot reload) en :8080 [PID $!]"
+            else
+                ENTRY=$(find . -name "main.go" -path "*/cmd/*" | head -1)
+                ENTRY=${ENTRY:-main.go}
+                go run "$ENTRY" > /tmp/backend.log 2>&1 &
+                PIDS+=($!)
+                ok "Backend Go en :8080 [PID $!]"
+            fi
+        fi
+    elif [[ -f "$PROJECT_ROOT/backend/package.json" ]]; then
+        if check_port 8080; then
+            ok "Backend Node ya corriendo en :8080"
+        else
+            log "Levantando backend Node..."
+            cd "$PROJECT_ROOT/backend"
+            npm run dev > /tmp/backend.log 2>&1 &
+            PIDS+=($!)
+            ok "Backend Node en :8080 [PID $!]"
+        fi
+    fi
+}
+
+# --- FRONTEND ---
+start_frontend() {
+    if [[ -f "$PROJECT_ROOT/frontend/pubspec.yaml" ]]; then
+        if check_port 3000; then
+            ok "Frontend Flutter ya corriendo en :3000"
+        else
+            log "Levantando frontend Flutter..."
+            cd "$PROJECT_ROOT/frontend"
+            export PATH="/opt/flutter/bin:$PATH"
+            export CHROME_EXECUTABLE="${CHROME_EXECUTABLE:-/usr/bin/chromium-browser}"
+            flutter run -d chrome > /tmp/frontend.log 2>&1 &
+            PIDS+=($!)
+            ok "Frontend Flutter en Chrome [PID $!]"
+        fi
+    elif [[ -f "$PROJECT_ROOT/frontend/package.json" ]]; then
+        if check_port 3000; then
+            ok "Frontend Node ya corriendo en :3000"
+        else
+            log "Levantando frontend..."
+            cd "$PROJECT_ROOT/frontend"
+            npm run dev > /tmp/frontend.log 2>&1 &
+            PIDS+=($!)
+            ok "Frontend en :3000 [PID $!]"
+        fi
+    fi
+}
+
+# --- MAIN ---
+echo -e "${BLUE}══════════════════════════════════════${NC}"
+echo -e "${BLUE}  Dev Environment — ${PROJECT_ROOT##*/}${NC}"
+echo -e "${BLUE}══════════════════════════════════════${NC}"
+echo ""
+
+case "$COMPONENT" in
+    todo|all)   start_db; start_backend; start_frontend ;;
+    db)         start_db ;;
+    backend)    start_backend ;;
+    frontend)   start_frontend ;;
+    *)          echo "Uso: ./dev.sh [todo|backend|frontend|db] [--clean]"; exit 1 ;;
+esac
+
+echo ""
+echo -e "${GREEN}══════════════════════════════════════${NC}"
+echo -e "${GREEN}  Entorno listo${NC}"
+echo -e "${GREEN}══════════════════════════════════════${NC}"
+echo ""
+echo -e "  Logs backend:  ${YELLOW}tail -f /tmp/backend.log${NC}"
+echo -e "  Logs frontend: ${YELLOW}tail -f /tmp/frontend.log${NC}"
+echo -e "  Detener todo:  ${YELLOW}Ctrl+C${NC}"
+echo ""
+
+wait
